@@ -1,4 +1,5 @@
-from __future__ import print_function
+""" YOLO detection demo in Caffe """
+from __future__ import print_function, division
 
 import getopt
 import sys
@@ -21,57 +22,80 @@ else:
     caffe.set_mode_cpu()
 
 
-def interpret_output(output, img_size):
-    classes = ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
-               "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
-               "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
-    w_img, h_img = img_size[1], img_size[0]
-    print(w_img, h_img)
+def get_boxes(output, img_size, grid_size, num_boxes):
+    """ extract bounding boxes from the last layer """
 
-    threshold = 0.2
-    iou_threshold = 0.5
-    num_class = 20
-    num_box = 2
-    grid_size = 7
-    probs = np.zeros((grid_size, grid_size, num_box, num_class))
-    class_probs = np.reshape(output[0:980], (grid_size, grid_size, num_class))
-    scales = np.reshape(output[980:1078], (grid_size, grid_size, num_box))
-    boxes = np.reshape(output[1078:], (grid_size, grid_size, num_box, 4))
-    offset = np.transpose(np.reshape(
-        np.array([np.arange(7)]*14), (num_box, grid_size, grid_size)), (1, 2, 0))
+    w_img, h_img = img_size[1], img_size[0]
+    boxes = np.reshape(output, (grid_size, grid_size, num_boxes, 4))
+
+    offset = np.transpose(
+        np.reshape(np.array([np.arange(grid_size)]*grid_size*2),
+                   (num_boxes, grid_size, grid_size)), (1, 2, 0))
 
     boxes[:, :, :, 0] += offset
     boxes[:, :, :, 1] += np.transpose(offset, (1, 0, 2))
-    boxes[:, :, :, 0:2] = boxes[:, :, :, 0:2] / 7.0
-    boxes[:, :, :, 2] = np.multiply(boxes[:, :, :, 2], boxes[:, :, :, 2])
-    boxes[:, :, :, 3] = np.multiply(boxes[:, :, :, 3], boxes[:, :, :, 3])
+    boxes[:, :, :, 0:2] /= 7.0
+    # the prediction is the square root of the box size
+    boxes[:, :, :, 2:4] *= boxes[:, :, :, 2:4]
 
-    boxes[:, :, :, 0] *= w_img
-    boxes[:, :, :, 1] *= h_img
-    boxes[:, :, :, 2] *= w_img
-    boxes[:, :, :, 3] *= h_img
+    boxes[:, :, :, [0, 2]] *= w_img
+    boxes[:, :, :, [1, 3]] *= h_img
 
-    for i in range(2):
-        for j in range(20):
-            probs[:, :, i, j] = np.multiply(class_probs[:, :, j], scales[:, :, i])
+    return boxes
+
+
+def parse_yolo_output(output, img_size):
+    """ convert the output of YOLO's last layer to boxes and confidence in each
+    class """
+
+    num_classes = 20
+    num_boxes = 2
+    grid_size = 7
+
+    sc_offset = grid_size * grid_size * num_classes
+    box_offset = sc_offset + grid_size * grid_size * num_boxes
+
+    class_probs = np.reshape(output[0:sc_offset], (grid_size, grid_size, num_classes))
+    confidences = np.reshape(output[sc_offset:box_offset], (grid_size, grid_size, num_boxes))
+
+    probs = np.zeros((grid_size, grid_size, num_boxes, num_classes))
+    for i in range(num_boxes):
+        for j in range(num_classes):
+            probs[:, :, i, j] = class_probs[:, :, j] * confidences[:, :, i]
+
+    boxes = get_boxes(output[box_offset:], img_size, grid_size, num_boxes)
+
+    return boxes, probs
+
+
+def get_candidate_objects(output, img_size):
+    """ convert network output to bounding box predictions """
+
+    classes = ["aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
+               "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
+               "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
+
+    threshold = 0.2
+    iou_threshold = 0.5
+
+    boxes, probs = parse_yolo_output(output, img_size)
 
     filter_mat_probs = np.array(probs >= threshold, dtype='bool')
-    filter_mat_boxes = np.nonzero(filter_mat_probs)
-    boxes_filtered = boxes[filter_mat_boxes[0], filter_mat_boxes[1], filter_mat_boxes[2]]
+    filter_mat_boxes = np.nonzero(filter_mat_probs)[0:3]
+    boxes_filtered = boxes[filter_mat_boxes]
     probs_filtered = probs[filter_mat_probs]
-    classes_num_filtered = np.argmax(filter_mat_probs, axis=3)\
-         [filter_mat_boxes[0], filter_mat_boxes[1], filter_mat_boxes[2]]
+    classes_num_filtered = np.argmax(filter_mat_probs, axis=3)[filter_mat_boxes]
 
-    argsort = np.argsort(probs_filtered)[::-1]
-    boxes_filtered = boxes_filtered[argsort]
-    probs_filtered = probs_filtered[argsort]
-    classes_num_filtered = classes_num_filtered[argsort]
+    idx = np.argsort(probs_filtered)[::-1]
+    boxes_filtered = boxes_filtered[idx]
+    probs_filtered = probs_filtered[idx]
+    classes_num_filtered = classes_num_filtered[idx]
 
-    for i in range(len(boxes_filtered)):
+    for i, box_filtered in enumerate(boxes_filtered):
         if probs_filtered[i] == 0:
             continue
         for j in range(i+1, len(boxes_filtered)):
-            if iou(boxes_filtered[i], boxes_filtered[j]) > iou_threshold:
+            if iou(box_filtered, boxes_filtered[j]) > iou_threshold:
                 probs_filtered[j] = 0.0
 
     filter_iou = np.array(probs_filtered > 0.0, dtype='bool')
@@ -80,21 +104,19 @@ def interpret_output(output, img_size):
     classes_num_filtered = classes_num_filtered[filter_iou]
 
     result = []
-    for i in range(len(boxes_filtered)):
-        result.append(
-            [classes[classes_num_filtered[i]],
-             boxes_filtered[i][0], boxes_filtered[i][1],
-             boxes_filtered[i][2], boxes_filtered[i][3], probs_filtered[i]])
+    for class_id, box, prob in zip(classes_num_filtered, boxes_filtered, probs_filtered):
+        result.append([classes[class_id], box[0], box[1], box[2], box[3], prob])
 
     return result
 
+
 def iou(box1, box2):
     """ compute intersection over union score """
-    tb = min(box1[0]+0.5*box1[2], box2[0]+0.5*box2[2]) - \
-         max(box1[0]-0.5*box1[2], box2[0]-0.5*box2[2])
-    lr = min(box1[1]+0.5*box1[3], box2[1]+0.5*box2[3]) - \
-         max(box1[1]-0.5*box1[3], box2[1]-0.5*box2[3])
-    intersection = 0 if tb < 0 or lr < 0 else tb*lr
+    box_tb = min(box1[0]+0.5*box1[2], box2[0]+0.5*box2[2]) - \
+             max(box1[0]-0.5*box1[2], box2[0]-0.5*box2[2])
+    box_lr = min(box1[1]+0.5*box1[3], box2[1]+0.5*box2[3]) - \
+             max(box1[1]-0.5*box1[3], box2[1]-0.5*box2[3])
+    intersection = max(0.0, box_tb) * max(0.0, box_lr)
 
     return intersection / (box1[2]*box1[3] + box2[2]*box2[3] - intersection)
 
@@ -105,22 +127,17 @@ def show_results(img, results, img_size):
     img_width, img_height = img_size[1], img_size[0]
     disp_console = True
     imshow = True
-#   if self.filewrite_txt :
-#       ftxt = open(self.tofile_txt,'w')
+
     for result in results:
-        x, y, w, h = int(result[1]), int(result[2]), int(result[3])//2, int(result[4])//2
+        box_x, box_y, box_w, box_h = [int(v) for v in result[1:5]]
         if disp_console:
-            print('    class : ' + result[0] + ' , [x,y,w,h]=[' + str(x) +
-                  ',' + str(y) + ',' + str(int(result[3])) + ',' +
-                  str(int(result[4]))+'], Confidence = ' + str(result[5]))
-        xmin = x-w if x > w else 0
-        xmax = x+w if x < img_width-w else img_width
-        ymin = y-h if x > h else 0
-        ymax = y+h if y < img_height-h else img_height
+            print('    class : {}, [x,y,w,h]=[{:d},{:d},{:d},{:d}], Confidence = {}'.\
+                format(result[0], box_x, box_y, box_w, box_h, str(result[5])))
+        xmin, xmax = max(box_x-box_w//2, 0), min(box_x+box_w//2, img_width)
+        ymin, ymax = max(box_y-box_h//2, 0), min(box_y+box_h//2, img_height)
 
         if imshow:
             cv2.rectangle(img_cp, (xmin, ymin), (xmax, ymax), (0, 255, 0), 2)
-            print(xmin, ymin, xmax, ymax)
             cv2.rectangle(img_cp, (xmin, ymin-20), (xmax, ymin), (125, 125, 125), -1)
             cv2.putText(img_cp, result[0] + ' : %.2f' % result[5], (xmin+5, ymin-7),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 0), 1)
@@ -131,6 +148,7 @@ def show_results(img, results, img_size):
 
 
 def main(argv):
+    """ script entry point """
     model_filename = ''
     weight_filename = ''
     img_filename = ''
@@ -139,7 +157,7 @@ def main(argv):
         print(opts)
     except getopt.GetoptError:
         print('yolo_main.py -m <model_file> -w <output_file> -i <img_file>')
-        sys.exit(2)
+        return
 
     for opt, arg in opts:
         if opt == '-h':
@@ -154,6 +172,7 @@ def main(argv):
     print('model file is "', model_filename)
     print('weight file is "', weight_filename)
     print('image file is "', img_filename)
+
     net = caffe.Net(model_filename, weight_filename, caffe.TEST)
     img = caffe.io.load_image(img_filename) # load the image using caffe io
     inputs = img
@@ -164,11 +183,11 @@ def main(argv):
     out = net.forward_all(data=np.asarray([transformer.preprocess('data', inputs)]))
     end = datetime.now()
     elapsed_time = end-start
-    print('total time is " milliseconds', elapsed_time.total_seconds()*1000)
-    print(out.iteritems())
+    print('total time is {:.02f} milliseconds'.format(elapsed_time.total_seconds()*1e3))
+
     img_cv = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
     # fc27 instead of fc12 for yolo_small
-    results = interpret_output(out['result'][0], img.shape)
+    results = get_candidate_objects(out['result'][0], img.shape)
     show_results(img_cv, results, img.shape)
     cv2.waitKey(10000)
 
