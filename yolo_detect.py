@@ -150,7 +150,7 @@ def show_results(img, results):
         ymin, ymax = max(box_y-box_h//2, 0), min(box_y+box_h//2, img_height)
 
         if imshow:
-            draw_box(result[0], (xmin, ymin, xmax, ymax), result[5])
+            draw_box(img, result[0], (xmin, ymin, xmax, ymax), result[5])
     if imshow:
         cv2.imshow('YOLO detection', img)
 
