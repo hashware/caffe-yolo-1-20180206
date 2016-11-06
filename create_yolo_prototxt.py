@@ -20,7 +20,7 @@ def load_configuration(fname):
     element = {}
     section_name = None
     for line in lines:
-        if not line:
+        if not line or line[0] == '#':  # empty or comment
             continue
         if line[0] == '[':  # new section
             if section_name:
@@ -57,13 +57,15 @@ def convolutional_layer(previous, name, params, deploy=True):
     fields = dict(num_output=int(params["filters"]),
                   kernel_size=int(params["size"]),
                   stride=int(params["stride"]))
+    if int(params.get("pad", 0)) == 1:    # use 'same' strategy for convolutions
+        fields["pad"] = fields["kernel_size"]//2
     if not deploy:
         fields.update(weight_filler=dict(type="gaussian", std=0.01),
                       bias_filler=dict(type="constant", value=0))
     return cl.Convolution(previous, name=name, **fields)
 
 
-def pooling_layer(previous, name, params):
+def max_pooling_layer(previous, name, params):
     """ create a max pooling layer """
     return cl.Pooling(
         previous, name=name, pool=cp.Pooling.MAX,
@@ -91,12 +93,12 @@ def convert_configuration(config, deploy=True):
         elif section == "convolutional":
             count += 1
             layer_name = "conv{}".format(count)
+            last_layer = convolutional_layer(last_layer, layer_name, params, deploy)
+            setattr(model, layer_name, last_layer)
             if params["batch_normalize"] == '1':
                 bn_name = layer_name + "_BN"
                 last_layer = cl.BatchNorm(last_layer, name=bn_name)
                 setattr(model, bn_name, last_layer)
-            last_layer = convolutional_layer(last_layer, layer_name, params, deploy)
-            setattr(model, layer_name, last_layer)
             if params["activation"] == "leaky":
                 layer_name = "relu{}".format(count)
                 last_layer = cl.ReLU(last_layer, name=layer_name,
@@ -104,12 +106,18 @@ def convert_configuration(config, deploy=True):
                 setattr(model, layer_name, last_layer)
         elif section == "maxpool":
             layer_name = "pool{}".format(count)
-            last_layer = pooling_layer(last_layer, layer_name, params)
+            last_layer = max_pooling_layer(last_layer, layer_name, params)
             setattr(model, layer_name, last_layer)
         elif section == "connected":
             count += 1
             layer_name = "fc{}".format(count)
             last_layer = dense_layer(last_layer, layer_name, params, deploy)
+        elif section == "dropout":
+            if not deploy:
+                layer_name = "drop{0}".format(count)
+                last_layer = cl.Dropout(last_layer, name=layer_name,
+                                        dropout_ratio=float(params["probability"]))
+                setattr(model, layer_name, last_layer)
         else:
             print("WARNING: {0} layer not recognized".format(section))
 

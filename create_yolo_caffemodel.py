@@ -2,15 +2,14 @@
 """
 Created on Fri Apr 29 16:10:21 2016
 
-@author: xingw
+@author: xingw, Banus
 """
 from __future__ import print_function
 
-import getopt
-import sys
+import argparse
 
-import caffe
 import numpy as np
+import caffe
 
 
 def transpose_matrix(array, rows, cols):
@@ -18,82 +17,76 @@ def transpose_matrix(array, rows, cols):
     return array.reshape((rows, cols)).transpose().flatten()
 
 
+def load_parameter(weights, layer_data, transpose=False):
+    """  load Caffe parameters from YOLO weights """
+    shape = layer_data.shape
+    size = np.prod(shape)
+    if transpose:
+        layer_data[...] = np.reshape(
+            transpose_matrix(weights[:size], shape[1], shape[0]), shape)
+    else:
+        layer_data[...] = np.reshape(weights[:size], shape)
+
+    return size
+
+
 def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
     """ convert YOLO weights to .caffemodel format given the caffe model """
     net = caffe.Net(model_filename, caffe.TEST)
-    layers = net.params.keys()
 
     # read header to get the transpose flag
     weights_int = np.fromfile(yoloweight_filename, dtype=np.int32, count=4)
     # transpose flag, the first 4 entries are major, minor, revision and net.seen
     transp_flag = (weights_int[0] > 1000 or weights_int[1] > 1000)
-    print('Transpose FC: {}'.format(transp_flag))
+    print('Transpose fc layers: {}'.format(transp_flag))
 
     # read the weights from YOLO file, skipping the header
     weights = np.fromfile(yoloweight_filename, dtype=np.float32)[4:]
-    print('Weigts to convert: {}'.format(weights.shape[0]))
 
     count = 0
-    for layer in layers:
-        bias_size = np.prod(net.params[layer][1].data.shape)
-        net.params[layer][1].data[...] = \
-            np.reshape(weights[count:count+bias_size], net.params[layer][1].data.shape)
-        count += bias_size
-        weight_size = np.prod(net.params[layer][0].data.shape)
-        if layer[0:2] == 'co': # convolutional layer
-            net.params[layer][0].data[...] = \
-                np.reshape(weights[count:count+weight_size], net.params[layer][0].data.shape)
-        else: # fc layer
-            dims = net.params[layer][0].data.shape
-            if transp_flag: # need to transpose for fc layers
-                net.params[layer][0].data[...] = \
-                    np.reshape(transpose_matrix(
-                        weights[count:count+weight_size], dims[1], dims[0]), dims)
-            else:
-                net.params[layer][0].data[...] = np.reshape(weights[count:count+weight_size], dims)
-        count += weight_size
+    for name, layer in zip(net.top_names, net.layers):
+        if name not in net.params.keys():  # layer without parameters
+            continue
 
-    print('Converted {} weights.'.format(count))
+        print("  converting {0}".format(name))
+        count += load_parameter(weights[count:], net.params[name][1].data) # bias
+
+        if   layer.type == 'Convolution':
+            bn_name = "{0}_BN".format(name)
+            if bn_name in net.top_names:  # there is a batchnorm layer
+                # scales, rolling mean, rolling variance
+                count += load_parameter(weights[count:], net.params[bn_name][0].data)
+                count += load_parameter(weights[count:], net.params[bn_name][1].data)
+            # weights
+            count += load_parameter(weights[count:], net.params[name][0].data, transp_flag)
+        elif layer.type == 'InnerProduct':   # fc layer
+            count += load_parameter(weights[count:], net.params[name][0].data, transp_flag)
+        elif layer.type == 'BatchNorm':
+            continue   # handled within the convolutional layer
+        else:
+            print("WARNING: unknown type {} for {}".format(layer.type, name))
+
     if count != weights.shape[0]:  # weights left out
-        raise ValueError(" Wring number of weights: read {}, used {}".
-                         format(weights.shape[0], count))
+        raise ValueError(" Wrong number of weights: read {0}, used {1} (missing {2})".
+                         format(weights.shape[0], count, weights.shape[0]-count))
+    print('Converted {0} weights.'.format(count))
     net.save(caffemodel_filename)
 
 
-def main(argv):
+def main():
     """ script entry point """
-    model_filename = ''
-    yoloweight_filename = ''
-    caffemodel_filename = ''
-    usage_message = 'Usage: create_yolo_caffemodel.py -m <caffe_model_file> '\
-                    '-w <yoloweight_filename> -o <caffemodel_output>'
-    try:
-        opts, _ = getopt.getopt(argv, "hm:w:o:")
-        print('Options: {}'.format(opts))
-    except getopt.GetoptError:
-        print(usage_message)
-        return
-    if not opts:
-        print(usage_message)
-        return
+    parser = argparse.ArgumentParser(description='Convert YOLO weights to Caffe.')
+    parser.add_argument('model', type=str, help='Caffe model file')
+    parser.add_argument('yolo_weights', type=str, help='YOLO weight file')
+    parser.add_argument('output', type=str, help='converted .caffemodel')
+    args = parser.parse_args()
 
-    for opt, arg in opts:
-        if opt == '-h':
-            print(usage_message)
-            return
-        elif opt == "-m":
-            model_filename = arg
-        elif opt == "-w":
-            yoloweight_filename = arg
-        elif opt == "-o":
-            caffemodel_filename = arg
+    print('model file is {}'.format(args.model))
+    print('weight file is {}'.format(args.yolo_weights))
+    print('output caffemodel file is {}'.format(args.output))
 
-    print('model file is {}'.format(model_filename))
-    print('weight file is {}'.format(yoloweight_filename))
-    print('output caffemodel file is {}'.format(caffemodel_filename))
-
-    convert_weights(model_filename, yoloweight_filename, caffemodel_filename)
+    convert_weights(args.model, args.yolo_weights, args.output)
 
 
 if __name__ == '__main__':
-    main(sys.argv[1:])
+    main()
