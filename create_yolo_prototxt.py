@@ -55,13 +55,16 @@ def data_layer(name, params, deploy=True):
 def convolutional_layer(previous, name, params, deploy=True):
     """ create a convolutional layer given the parameters and previous layer """
     fields = dict(num_output=int(params["filters"]),
-                  kernel_size=int(params["size"]),
-                  stride=int(params["stride"]))
+                  kernel_size=int(params["size"]))
+    if "stride" in params.keys():
+        fields["stride"] = int(params["stride"])
+
     if int(params.get("pad", 0)) == 1:    # use 'same' strategy for convolutions
         fields["pad"] = fields["kernel_size"]//2
     if not deploy:
         fields.update(weight_filler=dict(type="gaussian", std=0.01),
                       bias_filler=dict(type="constant", value=0))
+
     return cl.Convolution(previous, name=name, **fields)
 
 
@@ -92,36 +95,50 @@ def convert_configuration(config, deploy=True):
             setattr(model, "data", last_layer)
         elif section == "convolutional":
             count += 1
-            layer_name = "conv{}".format(count)
+            layer_name = "conv{0}".format(count)
             last_layer = convolutional_layer(last_layer, layer_name, params, deploy)
             setattr(model, layer_name, last_layer)
-            if params["batch_normalize"] == '1':
-                bn_name = layer_name + "_BN"
-                last_layer = cl.BatchNorm(last_layer, name=bn_name)
-                setattr(model, bn_name, last_layer)
+            if params.get("batch_normalize", 0) == '1':
+                scale_name = "{0}_scale".format(layer_name)
+                last_layer = cl.Scale(last_layer, name=scale_name,
+                                      scale_param=dict(bias_term=True, axis=1))
+                setattr(model, scale_name, last_layer)
             if params["activation"] == "leaky":
                 layer_name = "relu{}".format(count)
                 last_layer = cl.ReLU(last_layer, name=layer_name,
                                      in_place=True, relu_param=dict(negative_slope=0.1))
                 setattr(model, layer_name, last_layer)
         elif section == "maxpool":
-            layer_name = "pool{}".format(count)
+            layer_name = "pool{0}".format(count)
             last_layer = max_pooling_layer(last_layer, layer_name, params)
             setattr(model, layer_name, last_layer)
         elif section == "connected":
             count += 1
-            layer_name = "fc{}".format(count)
+            layer_name = "fc{0}".format(count)
             last_layer = dense_layer(last_layer, layer_name, params, deploy)
+            setattr(model, layer_name, last_layer)
+            if params["activation"] == "leaky":
+                layer_name = "relu{}".format(count)
+                last_layer = cl.ReLU(last_layer, name=layer_name,
+                                     in_place=True, relu_param=dict(negative_slope=0.1))
+                setattr(model, layer_name, last_layer)
         elif section == "dropout":
             if not deploy:
                 layer_name = "drop{0}".format(count)
                 last_layer = cl.Dropout(last_layer, name=layer_name,
                                         dropout_ratio=float(params["probability"]))
                 setattr(model, layer_name, last_layer)
+        elif section == "crop":
+            if not deploy:
+                pass # TODO
+        elif section == "local":  # locally connected layer
+            count += 1
+            layer_name = "local{}".format(count)
+            raise ValueError("NOT IMPLEMENTED: {0}".format(layer_name))
         else:
             print("WARNING: {0} layer not recognized".format(section))
 
-    model.out = last_layer
+    model.result = last_layer
 
     return model
 

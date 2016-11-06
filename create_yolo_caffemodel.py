@@ -4,7 +4,7 @@ Created on Fri Apr 29 16:10:21 2016
 
 @author: xingw, Banus
 """
-from __future__ import print_function
+from __future__ import print_function, division
 
 import argparse
 
@@ -23,7 +23,7 @@ def load_parameter(weights, layer_data, transpose=False):
     size = np.prod(shape)
     if transpose:
         layer_data[...] = np.reshape(
-            transpose_matrix(weights[:size], shape[1], shape[0]), shape)
+            transpose_matrix(weights[:size], np.prod(shape[1:]), shape[0]), shape)
     else:
         layer_data[...] = np.reshape(weights[:size], shape)
 
@@ -47,28 +47,42 @@ def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
     for name, layer in zip(net.top_names, net.layers):
         if name not in net.params.keys():  # layer without parameters
             continue
+        if layer.type in ['BatchNorm', 'Scale']:
+            continue   # handled within the convolutional layer
 
         print("  converting {0}".format(name))
-        count += load_parameter(weights[count:], net.params[name][1].data) # bias
 
         if   layer.type == 'Convolution':
-            bn_name = "{0}_BN".format(name)
-            if bn_name in net.top_names:  # there is a batchnorm layer
-                # scales, rolling mean, rolling variance
-                count += load_parameter(weights[count:], net.params[bn_name][0].data)
-                count += load_parameter(weights[count:], net.params[bn_name][1].data)
+            scale_name = "{0}_scale".format(name)
+            if scale_name in net.top_names:  # there is a batchnorm layer
+                # YOLO stores bias, scale, rolling mean, rolling variance in
+                # this order
+                bias_size = np.prod(net.params[name][1].data.shape)
+                # the convolution bias in YOLO becomes the scale bias in Caffe
+                count += load_parameter(weights[count:], net.params[scale_name][1].data)
+                # the scale and variance in YOLO are merged in a single
+                scales = weights[count:count+bias_size]
+                count += bias_size
+                # the rolling mean in YOLO becomes the bias in convolution with inverted sign
+                count += load_parameter(-weights[count:count+bias_size], net.params[name][1].data)
+                # store final scales
+                scales /= (np.sqrt(weights[count:count+bias_size]) + .000001)
+                count += load_parameter(scales, net.params[scale_name][0].data)
+                # print([params.data.shape for params in net.params[bn_name]])
+            else:
+                count += load_parameter(weights[count:], net.params[name][1].data) # bias
             # weights
-            count += load_parameter(weights[count:], net.params[name][0].data, transp_flag)
+            # TODO: check "flipped" to load trasnposed weights
+            count += load_parameter(weights[count:], net.params[name][0].data)
         elif layer.type == 'InnerProduct':   # fc layer
+            count += load_parameter(weights[count:], net.params[name][1].data) # bias
             count += load_parameter(weights[count:], net.params[name][0].data, transp_flag)
-        elif layer.type == 'BatchNorm':
-            continue   # handled within the convolutional layer
         else:
             print("WARNING: unknown type {} for {}".format(layer.type, name))
 
     if count != weights.shape[0]:  # weights left out
         raise ValueError(" Wrong number of weights: read {0}, used {1} (missing {2})".
-                         format(weights.shape[0], count, weights.shape[0]-count))
+                         format(weights.size, count, weights.size-count))
     print('Converted {0} weights.'.format(count))
     net.save(caffemodel_filename)
 
