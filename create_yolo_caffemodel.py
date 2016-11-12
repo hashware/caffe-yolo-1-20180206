@@ -68,11 +68,9 @@ def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
                 # store final scales
                 scales /= (np.sqrt(weights[count:count+bias_size]) + .000001)
                 count += load_parameter(scales, net.params[scale_name][0].data)
-                # print([params.data.shape for params in net.params[bn_name]])
             else:
                 count += load_parameter(weights[count:], net.params[name][1].data) # bias
             # weights
-            # TODO: check "flipped" to load trasnposed weights
             count += load_parameter(weights[count:], net.params[name][0].data)
         elif layer.type == 'InnerProduct':   # fc layer
             count += load_parameter(weights[count:], net.params[name][1].data) # bias
