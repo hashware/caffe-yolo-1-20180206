@@ -118,8 +118,27 @@ def add_convolutional_layer(layers, count, params, train=False):
 
 def add_dense_layer(layers, count, params, train=False):
     """ add layers related to a connected block in YOLO to the layer list """
-    layer_name = "fc{0}".format(count)
-    layers.append(dense_layer(layers[-1], layer_name, params, train))
+    layers.append(dense_layer(layers[-1], "fc{0}".format(count), params, train))
+    if params["activation"] != "linear":
+        layers.append(activation_layer(layers[-1], count, params["activation"]))
+
+
+def add_local_layer(layers, count, params, train=False):
+    """ emulates local layer """
+    blob_w, blob_h = 7, 7
+    n_out = int(params["filters"])
+    n_inner = n_out * blob_w * blob_h
+
+    fields = dict(kernel_size=int(params["size"]), stride=int(params["stride"]))
+    if int(params.get("pad", 0)) == 1:
+        fields["pad"] = fields["kernel_size"]//2
+    layers.append(cl.Im2col(layers[-1], name="im2col{0}".format(count),
+                            convolution_param=fields))
+    layers.append(cl.InnerProduct(layers[-1], name="local{0}".format(count),
+                                  num_output=n_inner))
+    layers.append(cl.Reshape(
+        layers[-1], name="shape{0}".format(count),
+        reshape_param=dict(shape=dict(dim=[1, n_out, blob_w, blob_h]))))
     if params["activation"] != "linear":
         layers.append(activation_layer(layers[-1], count, params["activation"]))
 
@@ -134,7 +153,7 @@ def convert_configuration(config, train=False):
             input_params = params
             layers.append(data_layer("data", input_params, train))
         elif section == "crop":
-            if train:    # update data layer
+            if train:    # update data layer with crop parameters
                 input_params.update(params)
                 layers[-1] = data_layer("data", input_params, train)
         elif section == "convolutional":
@@ -152,7 +171,7 @@ def convert_configuration(config, train=False):
                                          dropout_ratio=float(params["probability"])))
         elif section == "local":  # locally connected layer
             count += 1
-            raise ValueError("NOT IMPLEMENTED: {0}".format("local{}".format(count)))
+            add_local_layer(layers, count, params, train)
         else:
             print("WARNING: {0} layer not recognized".format(section))
 
