@@ -7,8 +7,13 @@ Created on Fri Apr 29 16:10:21 2016
 from __future__ import print_function, division
 
 import argparse
+import os
 
 import numpy as np
+
+if 'GLOG_minloglevel' not in os.environ:
+    os.environ['GLOG_minloglevel'] = '2'  # suppress verbose Caffe output
+
 import caffe
 
 
@@ -47,6 +52,8 @@ def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
     for name, layer in zip(net.top_names, net.layers):
         if name not in net.params.keys():  # layer without parameters
             continue
+        if layer.type not in caffe.layer_type_list():
+            raise ValueError("Layer not available: {0}".format(layer.type))
         if layer.type in ['BatchNorm', 'Scale']:
             continue   # handled within the convolutional layer
 
@@ -60,7 +67,7 @@ def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
                 bias_size = np.prod(net.params[name][1].data.shape)
                 # the convolution bias in YOLO becomes the scale bias in Caffe
                 count += load_parameter(weights[count:], net.params[scale_name][1].data)
-                # the scale and variance in YOLO are merged in a single
+                # the scale and variance in YOLO are merged in a single scale
                 scales = weights[count:count+bias_size]
                 count += bias_size
                 # the rolling mean in YOLO becomes the bias in convolution with inverted sign
@@ -75,6 +82,9 @@ def convert_weights(model_filename, yoloweight_filename, caffemodel_filename):
         elif layer.type == 'InnerProduct':   # fc layer
             count += load_parameter(weights[count:], net.params[name][1].data) # bias
             count += load_parameter(weights[count:], net.params[name][0].data, transp_flag)
+        elif layer.type == 'LocalConvolution':
+            count += load_parameter(weights[count:], net.params[name][1].data) # bias
+            count += load_parameter(weights[count:], net.params[name][0].data)
         else:
             print("WARNING: unknown type {} for {}".format(layer.type, name))
 

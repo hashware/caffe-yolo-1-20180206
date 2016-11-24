@@ -2,9 +2,13 @@
 """
 Convert a YOLO's .cfg to Caffe's .prototxt
 """
-from __future__ import print_function
+from __future__ import print_function, division
 
 import argparse
+import os
+
+if 'GLOG_minloglevel' not in os.environ:
+    os.environ['GLOG_minloglevel'] = '2'  # suppress verbose Caffe output
 
 from caffe import layers as cl
 from caffe import params as cp
@@ -85,6 +89,29 @@ def convolutional_layer(previous, name, params, train=False):
     return cl.Convolution(previous, name=name, **fields)
 
 
+def local_layer(previous, name, params, train=False):
+    """ create a locally connected layer given the parameters and previous
+    layer """
+    if 'LocalConvolution' not in caffe.layer_type_list():
+        raise ValueError("Layer not available: LocalConvolution")
+
+    fields = dict(num_output=int(params["filters"]),
+                  kernel_size=int(params["size"]))
+                  # local_region_number=side,
+                  # local_region_ratio=1.0/side,
+                  # local_region_step=1)
+    if "stride" in params.keys():
+        fields["stride"] = int(params["stride"])
+
+    if int(params.get("pad", 0)) == 1:    # use 'same' strategy for convolutions
+        fields["pad"] = fields["kernel_size"]//2
+    if train:
+        fields.update(weight_filler=dict(type="gaussian", std=0.01),
+                      bias_filler=dict(type="constant", value=0))
+
+    return cl.LocalConvolution(previous, name=name, **fields)
+
+
 def max_pooling_layer(previous, name, params):
     """ create a max pooling layer """
     return cl.Pooling(
@@ -124,26 +151,13 @@ def add_dense_layer(layers, count, params, train=False):
 
 
 def add_local_layer(layers, count, params, train=False):
-    """ emulates local layer """
-    blob_w, blob_h = 7, 7
-    n_out = int(params["filters"])
-    n_inner = n_out * blob_w * blob_h
-
-    fields = dict(kernel_size=int(params["size"]), stride=int(params["stride"]))
-    if int(params.get("pad", 0)) == 1:
-        fields["pad"] = fields["kernel_size"]//2
-    layers.append(cl.Im2col(layers[-1], name="im2col{0}".format(count),
-                            convolution_param=fields))
-    layers.append(cl.InnerProduct(layers[-1], name="local{0}".format(count),
-                                  num_output=n_inner))
-    layers.append(cl.Reshape(
-        layers[-1], name="shape{0}".format(count),
-        reshape_param=dict(shape=dict(dim=[1, n_out, blob_w, blob_h]))))
+    """ add layers related to a connected block in YOLO to the layer list """
+    layers.append(local_layer(layers[-1], "local{0}".format(count), params, train))
     if params["activation"] != "linear":
         layers.append(activation_layer(layers[-1], count, params["activation"]))
 
 
-def convert_configuration(config, train=False):
+def convert_configuration(config, train=False, loc_layer=False):
     """ given a list of YOLO layers as dictionaries, convert them to Caffe """
     layers = []
     count = 0
@@ -169,7 +183,7 @@ def convert_configuration(config, train=False):
             if train:
                 layers.append(cl.Dropout(layers[-1], name="drop{0}".format(count),
                                          dropout_ratio=float(params["probability"])))
-        elif section == "local":  # locally connected layer
+        elif section == "local" and loc_layer:
             count += 1
             add_local_layer(layers, count, params, train)
         else:
@@ -183,22 +197,50 @@ def convert_configuration(config, train=False):
     return model
 
 
+def adjust_params(model, model_filename):
+    """ Set layer parameters that depends on blob attributes.
+    Blobs are available only in Net() objects, but NetSpec() or NetParameters()
+    can't be used to create a Net(). So we write a first prototxt, we reload it,
+    fix the missing parameters and save it again.
+    """
+    with open(model_filename, 'w') as fproto:
+        fproto.write("{0}".format(model.to_proto()))
+
+    net = caffe.Net(model_filename, caffe.TEST)
+    for name, layer in model.tops.iteritems():
+        if name.startswith("local"):
+            width, height = net.blobs[name].data.shape[-2:]
+            if width != height:
+                raise ValueError(" Only square inputs supported for local layers.")
+            layer.fn.params.update(
+                local_region_number=width, local_region_ratio=1.0/width,
+                local_region_step=1)
+
+    return model
+
+
 def main():
     """ script entry point """
     parser = argparse.ArgumentParser(description='Convert a YOLO cfg file.')
     parser.add_argument('model', type=str, help='YOLO cfg model')
     parser.add_argument('output', type=str, help='output prototxt')
+    parser.add_argument('--loclayer', action='store_true',
+                        help='use locally connected layer')
     parser.add_argument('--train', action='store_true',
                         help='generate train_val prototxt')
     args = parser.parse_args()
 
     config = load_configuration(args.model)
-    model = convert_configuration(config, args.train)
+    model = convert_configuration(config, args.train, args.loclayer)
 
     suffix = "train_val" if args.train else "deploy"
+    model_filename = "{}_{}.prototxt".format(args.output, suffix)
 
-    with open("{}_{}.prototxt".format(args.output, suffix), 'w') as fproto:
-        fproto.write('%s\n' % model.to_proto())
+    if args.loclayer:
+        model = adjust_params(model, model_filename)
+
+    with open(model_filename, 'w') as fproto:
+        fproto.write("{0}".format(model.to_proto()))
 
 
 if __name__ == '__main__':
