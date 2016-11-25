@@ -331,6 +331,6 @@ layer {
   bottom: "conv8_scale"
   top: "result"
   inner_product_param {
-    num_output: 1470
+    num_output: 4655
   }
 }
