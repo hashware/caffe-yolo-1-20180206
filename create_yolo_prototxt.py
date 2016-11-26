@@ -73,15 +73,17 @@ def activation_layer(previous, count, mode="relu"):
         raise ValueError("Activation mode not implemented: {0}".format(mode))
 
 
-def convolutional_layer(previous, name, params, train=False):
+def convolutional_layer(previous, name, params, train=False, has_bn=False):
     """ create a convolutional layer given the parameters and previous layer """
     fields = dict(num_output=int(params["filters"]),
                   kernel_size=int(params["size"]))
     if "stride" in params.keys():
         fields["stride"] = int(params["stride"])
-
     if int(params.get("pad", 0)) == 1:    # use 'same' strategy for convolutions
         fields["pad"] = fields["kernel_size"]//2
+    if has_bn:
+        fields["bias_term"] = False
+
     if train:
         fields.update(weight_filler=dict(type="gaussian", std=0.01),
                       bias_filler=dict(type="constant", value=0))
@@ -97,9 +99,6 @@ def local_layer(previous, name, params, train=False):
 
     fields = dict(num_output=int(params["filters"]),
                   kernel_size=int(params["size"]))
-                  # local_region_number=side,
-                  # local_region_ratio=1.0/side,
-                  # local_region_step=1)
     if "stride" in params.keys():
         fields["stride"] = int(params["stride"])
 
@@ -110,6 +109,18 @@ def local_layer(previous, name, params, train=False):
                       bias_filler=dict(type="constant", value=0))
 
     return cl.LocalConvolution(previous, name=name, **fields)
+
+
+def batchnorm_layer(previous, name, train=False):
+    """ create a batch normalization layer given the parameters and previous
+    layer """
+    if not train:
+        return cl.BatchNorm(previous, name=name, use_global_stats=True)
+
+    return cl.BatchNorm(previous, name=name, include=dict(phase=caffe.TRAIN),
+                        # suppress SGD on bn params for old Caffe versions
+                        param=[dict(lr_mult=0, decay_mult=0)]*3,
+                        use_global_stats=False)
 
 
 def max_pooling_layer(previous, name, params):
@@ -134,11 +145,15 @@ def dense_layer(previous, name, params, train=False):
 def add_convolutional_layer(layers, count, params, train=False):
     """ add layers related to a convolutional block in YOLO the layer list """
     layer_name = "conv{0}".format(count)
-    layers.append(convolutional_layer(layers[-1], layer_name, params, train))
-    if params.get("batch_normalize", 0) == '1':
-        scale_name = "{0}_scale".format(layer_name)
-        layers.append(cl.Scale(layers[-1], name=scale_name,
-                               scale_param=dict(bias_term=True, axis=1)))
+    has_batch_norm = (params.get("batch_normalize", '0') == '1')
+
+    layers.append(convolutional_layer(layers[-1], layer_name, params,
+                                      train, has_batch_norm))
+    if has_batch_norm:
+        layers.append(batchnorm_layer(layers[-1], "{0}_bn".format(layer_name),
+                                      train))
+        layers.append(cl.Scale(layers[-1], name="{0}_scale".format(layer_name),
+                               scale_param=dict(bias_term=True)))
     if params["activation"] != "linear":
         layers.append(activation_layer(layers[-1], count, params["activation"]))
 
