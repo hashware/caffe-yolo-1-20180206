@@ -26,7 +26,8 @@ def get_boxes(output, img_size, grid_size, num_boxes):
     w_img, h_img = img_size[1], img_size[0]
     boxes = np.reshape(output, (grid_size, grid_size, num_boxes, 4))
 
-    offset = np.tile(np.arange(grid_size)[:, np.newaxis], (grid_size, 1, num_boxes))
+    offset = np.tile(np.arange(grid_size)[:, np.newaxis],
+                     (grid_size, 1, num_boxes))
 
     boxes[:, :, :, 0] += offset
     boxes[:, :, :, 1] += np.transpose(offset, (1, 0, 2))
@@ -77,12 +78,9 @@ def softmax(val, axis=-1):
     return exp / np.sum(exp, axis=axis, keepdims=True)
 
 
-def get_boxes_v2(output, img_size):
+def get_boxes_v2(output, img_size, anchors):
     """ extract bounding boxes from the last layer (Darknet v2) """
-    # bias_w = [1.08, 3.42, 6.63, 9.42, 16.62]
-    # bias_h = [1.19, 4.41, 11.38, 5.11, 10.52]
-    bias_w = [0.738768, 2.42204, 4.30971, 10.246, 12.6868]
-    bias_h = [0.874946, 2.65704, 7.04493, 4.59428, 11.8741]
+    bias_w, bias_h = anchors
 
     w_img, h_img = img_size[1], img_size[0]
     grid_w, grid_h, num_boxes = output.shape[:3]
@@ -104,7 +102,7 @@ def get_boxes_v2(output, img_size):
     return boxes
 
 
-def parse_yolo_output_v2(output, img_size, num_classes):
+def parse_yolo_output_v2(output, img_size, num_classes, anchors):
     """ convert the output of the last convolutional layer (Darknet v2) """
     n_coord_box = 4
 
@@ -114,18 +112,18 @@ def parse_yolo_output_v2(output, img_size, num_classes):
              .transpose((2, 3, 0, 1))
 
     probs = logistic(output[:, :, :, 4:5]) * softmax(output[:, :, :, 5:], axis=3)
-    boxes = get_boxes_v2(output[:, :, :, :4], img_size)
+    boxes = get_boxes_v2(output[:, :, :, :4], img_size, anchors)
 
     return boxes, probs
 
 
-def parse_yolo_output(output, img_size, num_classes):
+def parse_yolo_output(output, img_size, num_classes, anchors=None):
     """ convert the output of YOLO's last layer to boxes and confidence in each
     class """
     if len(output.shape) == 1:
         return parse_yolo_output_v1(output, img_size, num_classes)
-    elif len(output.shape) == 3:
-        return parse_yolo_output_v2(output, img_size, num_classes)
+    elif len(output.shape) == 3 and anchors is not None:
+        return parse_yolo_output_v2(output, img_size, num_classes, anchors)
     else:
         raise ValueError(" output format not recognized")
 
@@ -152,12 +150,19 @@ def get_candidate_objects(output, img_size, coco=False):
         "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
         "scissors", "teddy bear", "hair drier", "toothbrush"
     ]
-    classes = classes_coco if coco else classes_voc
+    if coco:
+        classes = classes_coco
+        anchors = [[0.738768, 2.42204, 4.30971, 10.246, 12.6868],
+                   [0.874946, 2.65704, 7.04493, 4.59428, 11.8741]]
+    else:
+        classes = classes_voc
+        anchors =  [[1.08, 3.42, 6.63, 9.42, 16.62],
+                    [1.19, 4.41, 11.38, 5.11, 10.52]]
 
     threshold = 0.2
     iou_threshold = 0.4
 
-    boxes, probs = parse_yolo_output(output, img_size, len(classes))
+    boxes, probs = parse_yolo_output(output, img_size, len(classes), anchors)
 
     filter_mat_probs = (probs >= threshold)
     filter_mat_boxes = np.nonzero(filter_mat_probs)[0:3]
@@ -176,13 +181,8 @@ def get_candidate_objects(output, img_size, coco=False):
             len(boxes_filtered)))
         return []
 
-    # Non-Maxima Suppression: greedily suppress low-score overlapped boxes
-    for i, box_filtered in enumerate(boxes_filtered):
-        if probs_filtered[i] == 0:
-            continue
-        for j in range(i+1, len(boxes_filtered)):
-            if iou(box_filtered, boxes_filtered[j]) > iou_threshold:
-                probs_filtered[j] = 0.0
+    probs_filtered = non_maxima_suppression(boxes_filtered, probs_filtered,
+                                            classes_num_filtered, iou_threshold)
 
     filter_iou = (probs_filtered > 0.0)
     boxes_filtered = boxes_filtered[filter_iou]
@@ -196,15 +196,31 @@ def get_candidate_objects(output, img_size, coco=False):
     return result
 
 
-def iou(box1, box2):
+def non_maxima_suppression(boxes, probs, classes_num, thr=0.2):
+    """ greedily suppress low-scoring overlapped boxes """
+    for i, box in enumerate(boxes):
+        if probs[i] == 0:
+            continue
+        for j in range(i+1, len(boxes)):
+            if classes_num[i] == classes_num[j] and iou(box, boxes[j]) > thr:
+                probs[j] = 0.0
+
+    return probs
+
+
+def iou(box1, box2, denom="min"):
     """ compute intersection over union score """
     int_tb = min(box1[0]+0.5*box1[2], box2[0]+0.5*box2[2]) - \
              max(box1[0]-0.5*box1[2], box2[0]-0.5*box2[2])
     int_lr = min(box1[1]+0.5*box1[3], box2[1]+0.5*box2[3]) - \
              max(box1[1]-0.5*box1[3], box2[1]-0.5*box2[3])
-    intersection = max(0.0, int_tb) * max(0.0, int_lr)
 
-    return intersection / (box1[2]*box1[3] + box2[2]*box2[3] - intersection)
+    intersection = max(0.0, int_tb) * max(0.0, int_lr)
+    area1, area2 = box1[2]*box1[3], box2[2]*box2[3]
+    control_area = min(area1, area2) if denom == "min"  \
+                   else area1 + area2 - intersection
+
+    return intersection / control_area
 
 
 def draw_box(img, name, box, score):

@@ -1,4 +1,4 @@
-﻿|Python27|
+|Python27|
 
 .. |Python27| image:: https://img.shields.io/badge/python-2.7-blue.svg
     :target: https://www.python.org/
@@ -81,20 +81,28 @@ the Darknet v2 YOLO models are also not supported.
 Model files
 ===========
 
-Three converted models are available in the `prototxt` directory:
+Two models converted from YOLO v2 are available in the ``prototxt`` directory:
 
-* **YOLO tiny**: converted from `tiny-yolo.cfg`, 
-  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbLVktdDJEQ3FZTEk/view?usp=sharing>`__.
+* **YOLO tiny** (CoCo): converted from ``tiny-yolo.cfg``,
+  `caffemodel <https://drive.google.com/open?id=0Bx7QZuu7oVBbNEt5YmUzRGNXZlk>`__.
 
-* **YOLO small**: converted from `yolo-small.cfg`,
-  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbVVJaVzh2WV9CR28/view?usp=sharing>`__.
-
-* **YOLO CoCo tiny**: converted from `tiny-coco.cfg`,
-  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbcWRpVG9NNl9EanM/view?usp=sharing>`__.
+* **YOLO tiny VOC**: converted from ``tiny-yolo-voc.cfg``,
+  `caffemodel <https://drive.google.com/open?id=0Bx7QZuu7oVBbSEdpaDBGMVFIVk0>`__.
 
 
 Legacy models
 ^^^^^^^^^^^^^
+
+Three converted models from YOLO v1 are available in the ``prototxt/v1`` directory:
+
+* **YOLO tiny**: converted from ``yolov1/tiny-yolo.cfg``, 
+  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbLVktdDJEQ3FZTEk/view?usp=sharing>`__.
+
+* **YOLO small**: converted from ``yolov1/yolo-small.cfg``,
+  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbVVJaVzh2WV9CR28/view?usp=sharing>`__.
+
+* **YOLO CoCo tiny**: converted from ``yolov1/tiny-coco.cfg``,
+  `caffemodel <https://drive.google.com/file/d/0Bx7QZuu7oVBbcWRpVG9NNl9EanM/view?usp=sharing>`__.
 
 The models originally converted by *xingwangsfu* (https://github.com/xingwangsfu/caffe-yolo)
 are available in the directory ``prototxt/legacy``. The converted weights can
