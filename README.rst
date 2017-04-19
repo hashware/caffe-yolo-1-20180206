@@ -39,9 +39,11 @@ passed, the *train_val* version of the prototxt file is generated; however, the
 file lacks the information about input annotations, training loss and it's meant
 as a form of partial automation of a manually defined training.
 
-The YOLO weights are available on the `Darknet v1 <http://pjreddie.com/darknet/yolov1/>`_
-website. See the instructions there on how to download them. To convert the
-weights to Caffe, use:
+The YOLO weights are available on the `YOLO <https://pjreddie.com/darknet/yolo/>`_
+and `YOLO v1 <http://pjreddie.com/darknet/yolov1/>`_
+websites.
+See the instructions there on how to download the weight files.
+To convert them to Caffe, use:
 
 .. code:: bash
 
@@ -57,8 +59,10 @@ Test the results on one of the images in the repository with:
 
     python yolo_detect.py yolo_tiny_deploy.prototxt yolo_tiny.caffemodel images/dog.jpg
 
-To test the *CoCo* networks pass the ``--coco`` option in order to use the correct
-set of class labels.
+By default, the presets for the *CoCo* networks are used. To use the `Pascal VOC`
+preset pass ``--mode voc`` option in order to use the correct set of class labels.
+Classification is also supported for the `Darknet` networks: use ``--mode darknet``
+to enable it.
 
 
 Limitations
@@ -74,8 +78,8 @@ by the official Caffe repository. There is partial support to the version in
 `caffe-mt <https://github.com/knsong/caffe-mt>`_ by passing ``--loclayer`` to 
 ``create_yolo_prototxt.py`` but the implementation is still buggy.
 
-The *softmax* layer (for ``Darknet`` v2) and shortcut connections introduced in
-the Darknet v2 YOLO models are also not supported.
+The shortcut connections introduced in the Darknet v2 YOLO models are also not
+supported.
 
 
 Model files
@@ -88,6 +92,12 @@ Two models converted from YOLO v2 are available in the ``prototxt`` directory:
 
 * **YOLO tiny VOC**: converted from ``tiny-yolo-voc.cfg``,
   `caffemodel <https://drive.google.com/open?id=0Bx7QZuu7oVBbSEdpaDBGMVFIVk0>`__.
+
+* **Darknet** (Imagenet 1k): converted from ``darknet.cfg``,
+  `caffemodel <https://drive.google.com/open?id=0Bx7QZuu7oVBbU19ZdU5neFl0T1k>`__.
+
+* **Tiny Darknet** (Imagenet 1k): converted from ``tiny.cfg``,
+  `caffemodel <https://drive.google.com/open?id=0Bx7QZuu7oVBbRUxyRk9NOFRueGM>`_
 
 
 Legacy models
@@ -118,7 +128,7 @@ be downloaded here:
 Requirements
 ============
 
-   * `Caffe <http://caffe.berkeleyvision.org>`_ with ``pycaffe`` support
+   * `Caffe <http://caffe.berkeleyvision.org>`__ with ``pycaffe`` support
 
    * OpenCV 2 with python interfaces (``python-opencv`` in Ubuntu)
 
