@@ -130,6 +130,12 @@ def max_pooling_layer(previous, name, params):
         kernel_size=int(params["size"]), stride=int(params["stride"]))
 
 
+def global_pooling_layer(previous, name, mode="avg"):
+    """ create a Global Pooling Layer """
+    pool = cp.Pooling.AVE if mode == "avg" else cp.Pooling.MAX
+    return cl.Pooling(previous, name=name, pool=pool, global_pooling=True)
+
+
 def dense_layer(previous, name, params, train=False):
     """ create a densse layer """
     fields = dict(num_output=int(params["output"]))
@@ -191,6 +197,10 @@ def convert_configuration(config, train=False, loc_layer=False):
         elif section == "maxpool":
             layers.append(max_pooling_layer(layers[-1], "pool{0}".format(count),
                                             params))
+        elif section == "avgpool":
+            layers.append(global_pooling_layer(layers[-1], "pool{0}".format(count)))
+        elif section == "softmax":
+            layers.append(cl.Softmax(layers[-1], name="softmax{0}".format(count)))
         elif section == "connected":
             count += 1
             add_dense_layer(layers, count, params, train)
@@ -207,7 +217,7 @@ def convert_configuration(config, train=False, loc_layer=False):
     model = caffe.NetSpec()
     for layer in layers:
         setattr(model, layer.fn.params["name"], layer)
-    model.result = layers[-1]
+    model.result = layers[-1]       
 
     return model
 

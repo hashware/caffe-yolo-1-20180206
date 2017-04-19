@@ -20,6 +20,42 @@ else:
     caffe.set_mode_cpu()
 
 
+def load_names(filename):
+    """ load names from a text file (one per line) """
+    with open(filename, 'r') as fid:
+        names = [l.strip() for l in fid]
+    return names
+
+
+PRESETS = {
+    'coco': { 'classes': [
+        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
+        "truck", "boat", "traffic light", "fire hydrant", "stop sign",
+        "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
+        "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
+        "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
+        "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
+        "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
+        "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
+        "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
+        "couch", "potted plant", "bed", "dining table", "toilet", "tv",
+        "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
+        "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
+        "scissors", "teddy bear", "hair drier", "toothbrush"
+    ], 'anchors': [[0.738768, 2.42204, 4.30971, 10.246, 12.6868],
+                   [0.874946, 2.65704, 7.04493, 4.59428, 11.8741]]
+    },
+    'voc': { 'classes': [
+        "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
+        "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
+        "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"],
+        'anchors':  [[1.08, 3.42, 6.63, 9.42, 16.62],
+                    [1.19, 4.41, 11.38, 5.11, 10.52]]
+    },
+    'darknet': { 'classes': load_names('imagenet.shortnames'), 'anchors': []}
+}
+
+
 def get_boxes(output, img_size, grid_size, num_boxes):
     """ extract bounding boxes from the last layer """
 
@@ -128,39 +164,14 @@ def parse_yolo_output(output, img_size, num_classes, anchors=None):
         raise ValueError(" output format not recognized")
 
 
-def get_candidate_objects(output, img_size, coco=False):
+def get_candidate_objects(output, img_size, mode):
     """ convert network output to bounding box predictions """
-
-    classes_voc = [
-        "aeroplane", "bicycle", "bird", "boat", "bottle", "bus", "car",
-        "cat", "chair", "cow", "diningtable", "dog", "horse", "motorbike",
-        "person", "pottedplant", "sheep", "sofa", "train", "tvmonitor"]
-    classes_coco = [
-        "person", "bicycle", "car", "motorcycle", "airplane", "bus", "train",
-        "truck", "boat", "traffic light", "fire hydrant", "stop sign",
-        "parking meter", "bench", "bird", "cat", "dog", "horse", "sheep", "cow",
-        "elephant", "bear", "zebra", "giraffe", "backpack", "umbrella",
-        "handbag", "tie", "suitcase", "frisbee", "skis", "snowboard",
-        "sports ball", "kite", "baseball bat", "baseball glove", "skateboard",
-        "surfboard", "tennis racket", "bottle", "wine glass", "cup", "fork",
-        "knife", "spoon", "bowl", "banana", "apple", "sandwich", "orange",
-        "broccoli", "carrot", "hot dog", "pizza", "donut", "cake", "chair",
-        "couch", "potted plant", "bed", "dining table", "toilet", "tv",
-        "laptop", "mouse", "remote", "keyboard", "cell phone", "microwave",
-        "oven", "toaster", "sink", "refrigerator", "book", "clock", "vase",
-        "scissors", "teddy bear", "hair drier", "toothbrush"
-    ]
-    if coco:
-        classes = classes_coco
-        anchors = [[0.738768, 2.42204, 4.30971, 10.246, 12.6868],
-                   [0.874946, 2.65704, 7.04493, 4.59428, 11.8741]]
-    else:
-        classes = classes_voc
-        anchors =  [[1.08, 3.42, 6.63, 9.42, 16.62],
-                    [1.19, 4.41, 11.38, 5.11, 10.52]]
 
     threshold = 0.2
     iou_threshold = 0.4
+
+    classes = PRESETS[mode]['classes']
+    anchors = PRESETS[mode]['anchors']
 
     boxes, probs = parse_yolo_output(output, img_size, len(classes), anchors)
 
@@ -258,11 +269,27 @@ def show_results(img, results):
         cv2.imshow('YOLO detection', img)
 
 
-def detect(model_filename, weight_filename, img_filename, coco=False):
+def crop_max(img, shape):
+    """ crop the largest dimension to avoid stretching """
+    net_h, net_w = shape
+    height, width = img.shape[:2]
+    aratio = net_w / net_h
+
+    if width > height * aratio:
+        diff = int((width - height * aratio) / 2)
+        return img[:, diff:-diff, :]
+    else:
+        diff = int((height - width / aratio) / 2)
+        return img[diff:-diff, :, :]
+
+
+def detect(model_filename, weight_filename, img_filename, mode):
     """ given a YOLO caffe model and an image, detect the objects in the image
     """
     net = caffe.Net(model_filename, weight_filename, caffe.TEST)
     img = caffe.io.load_image(img_filename) # load the image using caffe.io
+    if mode == 'darknet':
+        img = crop_max(img, net.blobs['data'].data.shape[-2:])
 
     transformer = caffe.io.Transformer({'data': net.blobs['data'].data.shape})
     transformer.set_transpose('data', (2, 0, 1))
@@ -272,10 +299,20 @@ def detect(model_filename, weight_filename, img_filename, coco=False):
     t_end = datetime.now()
     print('total time is {:.2f} milliseconds'.format((t_end-t_start).total_seconds()*1e3))
 
-    img_cv = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-    results = get_candidate_objects(out['result'][0], img.shape, coco)
-    show_results(img_cv, results)
-    cv2.waitKey()
+    if mode == 'darknet':
+        net_output = out[out.keys()[0]]   # get first out layer
+        if len(net_output.shape) > 2:
+            net_output = np.squeeze(net_output)[np.newaxis, :]
+
+        ids = np.argsort(net_output[0])[-1:-6:-1]
+        print('predicted classes: {}'.format(
+            [(PRESETS[mode]['classes'][cls_id], net_output[0][cls_id])
+             for cls_id in ids]))
+    else:
+        img_cv = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+        results = get_candidate_objects(out['result'][0], img.shape, mode)
+        show_results(img_cv, results)
+        cv2.waitKey()
 
 
 def main():
@@ -284,14 +321,17 @@ def main():
     parser.add_argument('model', type=str, help='model prototxt')
     parser.add_argument('weights', type=str, help='model weights')
     parser.add_argument('image', type=str, help='input image')
-    parser.add_argument('--coco', action='store_true', help='use coco classes')
+    parser.add_argument('--mode', type=str, help='preset to use', default='coco')
     args = parser.parse_args()
+
+    if args.mode not in PRESETS.keys():
+        raise ValueError(" Preset not supported: {}".format(args.mode))
 
     print('model file is {}'.format(args.model))
     print('weight file is {}'.format(args.weights))
     print('image file is {}'.format(args.image))
 
-    detect(args.model, args.weights, args.image, args.coco)
+    detect(args.model, args.weights, args.image, args.mode)
 
 
 if __name__ == '__main__':
